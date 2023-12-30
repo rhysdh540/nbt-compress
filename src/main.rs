@@ -41,9 +41,13 @@ fn main() {
     let mut total_saved_space = 0;
 
     for file in &files {
-        let res = compress_file(file, iterations).unwrap();
-        total_time += res.0;
-        total_saved_space += res.1;
+        match compress_file(file, iterations) {
+            Ok((elapsed_time, saved_space)) => {
+                total_time += elapsed_time;
+                total_saved_space += saved_space;
+            }
+            Err(_) => {}
+        }
     }
 
     if files.len() > 1 {
