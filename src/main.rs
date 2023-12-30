@@ -1,6 +1,6 @@
 use std::io::{Result, Read, Cursor, Write};
 use std::num::NonZeroU64;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use flate2::read::GzDecoder;
 use zopfli::Format::Gzip;
@@ -37,12 +37,23 @@ fn main() {
         std::process::exit(1);
     }
 
+    let mut total_time = Duration::new(0, 0);
+    let mut total_saved_space = 0;
+
     for file in &files {
-        compress_file(file, iterations);
+        let res = compress_file(file, iterations).unwrap();
+        total_time += res.0;
+        total_saved_space += res.1;
+    }
+
+    if files.len() > 1 {
+        println!("\nDone!");
+        println!("Total time: {:?}", total_time);
+        println!("Total saved space: {} bytes", total_saved_space);
     }
 }
 
-fn compress_file(file: &str, iterations: i32) {
+fn compress_file(file: &str, iterations: i32) -> Result<(Duration, usize)> {
     match read_file(file) {
         Ok(contents) => {
             let start_time = Instant::now();
@@ -51,7 +62,7 @@ fn compress_file(file: &str, iterations: i32) {
                     Ok(c) => c,
                     Err(e) => {
                         eprintln!("Error compressing {}: {}", file, e);
-                        return;
+                        return Err(e);
                     }
                 };
             let elapsed_time = start_time.elapsed();
@@ -60,20 +71,26 @@ fn compress_file(file: &str, iterations: i32) {
                 let saved_space = contents.len() - optimized_contents.len();
                 if let Err(e) = write_file(file, optimized_contents) {
                     eprintln!("Error writing to {}: {}", file, e);
+                    Err(e)
                 } else {
                     println!(
                         "File {} compressed. Saved space: {} bytes. \nCompression time: {:?}",
                         file, saved_space, elapsed_time
                     );
+                    Ok((elapsed_time, saved_space))
                 }
             } else {
                 println!(
                     "File {} not compressed. No space saved. \nCompression time: {:?}",
                     file, elapsed_time
                 );
+                return Ok((elapsed_time, 0));
             }
         }
-        Err(e) => eprintln!("Error reading from {}: {}", file, e),
+        Err(e) => {
+            eprintln!("Error reading from {}: {}", file, e);
+            Err(e)
+        }
     }
 }
 
