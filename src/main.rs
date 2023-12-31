@@ -1,8 +1,8 @@
-use std::io::{Result, Read, Cursor, Write};
+use std::io::{Result, Read, Write, Error, ErrorKind::InvalidData};
 use std::num::NonZeroU64;
 use std::time::{Duration, Instant};
 
-use flate2::read::GzDecoder;
+use zune_inflate::DeflateDecoder as GzDecoder;
 use zopfli::Format::Gzip;
 
 
@@ -139,12 +139,11 @@ fn optimise_file_contents(input: Vec<u8>, force_iterations: i32) -> Result<Vec<u
 }
 
 fn decompress(stuff: Vec<u8>) -> Result<Vec<u8>> {
-    let mut decoder = GzDecoder::new(Cursor::new(stuff.clone()));
-    let mut result = Vec::new();
+    let mut decoder = GzDecoder::new(&stuff.clone()[..]);
 
-    match decoder.read_to_end(&mut result) {
-        Ok(_) => Ok(result),
-        Err(e) => Err(e)
+    match decoder.decode_gzip() {
+        Ok(result) => Ok(result),
+        Err(_) => Err(Error::new(InvalidData, "Invalid gzip data"))
     }
 }
 
