@@ -139,7 +139,8 @@ fn optimise_file_contents(input: Vec<u8>, force_iterations: i32) -> Result<Vec<u
 }
 
 fn decompress(stuff: Vec<u8>) -> Result<Vec<u8>> {
-    let mut decoder = GzDecoder::new(&stuff.clone()[..]);
+    let idk_why_rust_wants_me_to_do_this = stuff.clone();
+    let mut decoder = GzDecoder::new(&idk_why_rust_wants_me_to_do_this[..]);
 
     match decoder.decode_gzip() {
         Ok(result) => Ok(result),
