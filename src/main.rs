@@ -65,8 +65,14 @@ fn compress_file(file: &str, iterations: i32, zopfli: bool) -> Result<(Duration,
     match read_file(file) {
         Ok(contents) => {
             let start_time = Instant::now();
+
+            let uncompressed_contents = match decompress(contents.clone()) {
+                Ok(c) => c,
+                Err(e) => return Err(e)
+            };
+
             let optimized_contents =
-                match if zopfli { optimise_zopfli(contents.clone(), iterations) } else { compress_libdeflater(contents.clone(), 9) } {
+                match if zopfli { compress_zopfli(uncompressed_contents.clone(), iterations) } else { compress_libdeflater(uncompressed_contents.clone(), 12) } {
                     Ok(c) => c,
                     Err(e) => {
                         eprintln!("Error compressing {}: {}", file, e);
@@ -126,23 +132,6 @@ fn write_file(path: &str, contents: Vec<u8>) -> Result<()> {
     Ok(())
 }
 
-fn optimise_zopfli(input: Vec<u8>, force_iterations: i32) -> Result<Vec<u8>> {
-    let contents = match decompress(input.clone()) {
-        Ok(c) => c,
-        Err(e) => return Err(e)
-    };
-
-    let iter = if force_iterations != -1 {
-        force_iterations
-    } else if contents.len() > 20_000 {
-        100
-    } else {
-        500
-    };
-
-    Ok(compress_zopfli(contents, iter as u64).unwrap_or_else(|_| input))
-}
-
 fn decompress(data: Vec<u8>) -> Result<Vec<u8>> {
     let mut decompressor = Decompressor::new();
     let mut dest = vec![0; data.len() * 2];
@@ -172,9 +161,17 @@ fn compress_libdeflater(data: Vec<u8>, level: u8) -> Result<Vec<u8>> {
     }
 }
 
-fn compress_zopfli(stuff: Vec<u8>, iter: u64) -> Result<Vec<u8>> {
+fn compress_zopfli(stuff: Vec<u8>, iter: i32) -> Result<Vec<u8>> {
+    let actual_iter = if iter > 0 {
+        iter
+    } else if stuff.len() > 20_000 {
+        100
+    } else {
+        500
+    };
+
     let options = zopfli::Options {
-        iteration_count: NonZeroU64::new(iter).unwrap(),
+        iteration_count: NonZeroU64::new(actual_iter as u64).unwrap(),
         ..Default::default()
     };
 
