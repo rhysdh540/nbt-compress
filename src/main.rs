@@ -2,7 +2,7 @@ use std::io::{Result, Read, Write, Error, ErrorKind::InvalidData};
 use std::num::NonZeroU64;
 use std::time::{Duration, Instant};
 
-use zune_inflate::DeflateDecoder as GzDecoder;
+use libdeflater::*;
 use zopfli::Format::Gzip;
 
 
@@ -10,24 +10,28 @@ fn main() {
     let usage = "Usage: nbt-compress [-i <iterations>] file1 file2 ...";
     let args: Vec<String> = std::env::args().collect();
     let mut iterations = -1;
+    let mut use_zopfli = false;
     let mut files = Vec::new();
 
     for (index, arg) in args.iter().enumerate() {
-        if arg.starts_with("-i") {
-            iterations = parse_arg(&arg, &args, index).unwrap_or_else(|e| {
-                eprintln!("Error parsing iterations: {}", e);
-                std::process::exit(1);
-            });
-        } else if arg.starts_with("--iterations") {
-            iterations = parse_arg(&arg, &args, index).unwrap_or_else(|e| {
-                eprintln!("Error parsing iterations: {}", e);
-                std::process::exit(1);
-            });
-        } else if arg.eq("-h") || arg.eq("--help") {
-            println!("{}", usage);
-            std::process::exit(0);
-        } else if index > 0 {
-            // Skip the first argument (program name)
+        if index == 0 {
+            continue;
+        }
+
+        if arg == "-z" || arg == "--zopfli" {
+            use_zopfli = true;
+            continue;
+        }
+
+        if arg.starts_with("-") {
+            match parse_arg(arg, &args, index) {
+                Ok(i) => iterations = i,
+                Err(e) => {
+                    eprintln!("Error parsing argument: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        } else {
             files.push(arg.clone());
         }
     }
@@ -41,7 +45,7 @@ fn main() {
     let mut total_saved_space = 0;
 
     for file in &files {
-        match compress_file(file, iterations) {
+        match compress_file(file, iterations, use_zopfli) {
             Ok((elapsed_time, saved_space)) => {
                 total_time += elapsed_time;
                 total_saved_space += saved_space;
@@ -57,18 +61,19 @@ fn main() {
     }
 }
 
-fn compress_file(file: &str, iterations: i32) -> Result<(Duration, usize)> {
+fn compress_file(file: &str, iterations: i32, zopfli: bool) -> Result<(Duration, usize)> {
     match read_file(file) {
         Ok(contents) => {
             let start_time = Instant::now();
             let optimized_contents =
-                match optimise_file_contents(contents.clone(), iterations) {
+                match if zopfli { optimise_zopfli(contents.clone(), iterations) } else { compress_libdeflater(contents.clone(), 9) } {
                     Ok(c) => c,
                     Err(e) => {
                         eprintln!("Error compressing {}: {}", file, e);
                         return Err(e);
                     }
                 };
+
             let elapsed_time = start_time.elapsed();
 
             if optimized_contents.len() < contents.len() {
@@ -121,7 +126,7 @@ fn write_file(path: &str, contents: Vec<u8>) -> Result<()> {
     Ok(())
 }
 
-fn optimise_file_contents(input: Vec<u8>, force_iterations: i32) -> Result<Vec<u8>> {
+fn optimise_zopfli(input: Vec<u8>, force_iterations: i32) -> Result<Vec<u8>> {
     let contents = match decompress(input.clone()) {
         Ok(c) => c,
         Err(e) => return Err(e)
@@ -135,20 +140,39 @@ fn optimise_file_contents(input: Vec<u8>, force_iterations: i32) -> Result<Vec<u
         500
     };
 
-    Ok(compress(contents, iter as u64).unwrap_or_else(|_| input))
+    Ok(compress_zopfli(contents, iter as u64).unwrap_or_else(|_| input))
 }
 
-fn decompress(stuff: Vec<u8>) -> Result<Vec<u8>> {
-    let idk_why_rust_wants_me_to_do_this = stuff.clone();
-    let mut decoder = GzDecoder::new(&idk_why_rust_wants_me_to_do_this[..]);
-
-    match decoder.decode_gzip() {
-        Ok(result) => Ok(result),
-        Err(_) => Err(Error::new(InvalidData, "Invalid gzip data"))
+fn decompress(data: Vec<u8>) -> Result<Vec<u8>> {
+    let mut decompressor = Decompressor::new();
+    let mut dest = vec![0; data.len() * 2];
+    loop {
+        match decompressor.gzip_decompress(&*data, &mut dest) {
+            Ok(len) => {
+                dest.truncate(len);
+                return Ok(dest);
+            }
+            Err(DecompressionError::InsufficientSpace) => {
+                dest.resize(dest.len() * 2, 0);
+            }
+            Err(e) => return Err(Error::new(InvalidData, e)),
+        }
+    }
+}
+fn compress_libdeflater(data: Vec<u8>, level: u8) -> Result<Vec<u8>> {
+    let mut compressor = Compressor::new(CompressionLvl::new(level.into()).unwrap());
+    let capacity = compressor.gzip_compress_bound(data.len());
+    let mut dest = vec![0; capacity];
+    match compressor.gzip_compress(&*data, &mut dest) {
+        Ok(len) => {
+            dest.truncate(len);
+            Ok(dest)
+        }
+        Err(e) => Err(Error::new(InvalidData, e)),
     }
 }
 
-fn compress(stuff: Vec<u8>, iter: u64) -> Result<Vec<u8>> {
+fn compress_zopfli(stuff: Vec<u8>, iter: u64) -> Result<Vec<u8>> {
     let options = zopfli::Options {
         iteration_count: NonZeroU64::new(iter).unwrap(),
         ..Default::default()
